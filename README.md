@@ -18,7 +18,7 @@
 - 깃레포지토리에 자신의 이름 폴더 생성
 - 세부 폴더에 주 별로 폴더 생성 후 스터디 방식 인증    
 
-###디렉토리 생성방법
+### 디렉토리 생성방법
 -> https://github.com/ahn-it-study/Sql_Tuning_Study 
 -> Add file 
 -> Create new file
