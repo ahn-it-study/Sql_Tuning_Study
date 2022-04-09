@@ -16,7 +16,14 @@
 ## 스터디 참여방법
 
 - 깃레포지토리에 자신의 이름 폴더 생성
-- 세부 폴더에 주 별로 폴더 생성 후 스터디 방식 인증
+- 세부 폴더에 주 별로 폴더 생성 후 스터디 방식 인증    
+
+###디렉토리 생성방법
+-> https://github.com/ahn-it-study/Sql_Tuning_Study 
+-> Add file 
+-> Create new file
+-> (ch1. SQL 처리과정과 I\O / README.md) - README.md를 생성해야지만 디렉토리로 생성됩니다:)
+-> commit new file
 
 ## 스터디 진행방식
 
