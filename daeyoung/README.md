@@ -32,10 +32,10 @@ Index Range Scan을 통한 테이블 액세스는 랜덤 액세스와 Single Blo
 - 인덱스 스캔 효율화 튜닝
 - 랜덤 액세스 최소화 튜닝
 ### 인덱스 스캔 효율화 튜닝
-![Untitled Diagram drawio](https://user-images.githubusercontent.com/23313008/164474074-958aff4f-4ace-4a8d-97eb-3585455fec37.png)
+![Untitled Diagram drawio](https://user-images.githubusercontent.com/23313008/164474074-958aff4f-4ace-4a8d-97eb-3585455fec37.png)  
 학생명부에서 시력이 '1.0~1.5' 사이인 '홍길동' 학생을 찾는 경우 이름과 시력순으로 정렬해두었다면 위 표와같이 소량만 스캔하면 된다  
 반면 시력과 이름순으로 정렬해두었으면 똑같이 두명을 찾는데도 다음과 같이 많은양을 소비한다.
-![Untitled Diagram drawio-3](https://user-images.githubusercontent.com/23313008/164475092-8828213f-0aae-4858-bd2d-c806b3d9c566.png)
+![Untitled Diagram drawio-3](https://user-images.githubusercontent.com/23313008/164475092-8828213f-0aae-4858-bd2d-c806b3d9c566.png)  
 
 ### 랜덤 액세스 최소화 튜닝
 인덱스 스캔후 테이블 레코드를 액세스 할 때 랜덤 I/O방식을 사용한다. 그래서 이를 튜닝 하는것이  
@@ -55,7 +55,7 @@ Index Range Scan을 통한 테이블 액세스는 랜덤 액세스와 Single Blo
 -> 책에서 설명하는 결론: 'SQL튜닝은 랜덤 I/O와의 전쟁이다.' (인덱스에만 국한되지 않음.) 
 # 인덱스 구조
 ![bookindex](https://user-images.githubusercontent.com/23313008/164478224-24f3c6bd-d539-41b4-a5a2-2d71400c53c2.png)
-![Youtubue](https://user-images.githubusercontent.com/23313008/164478531-17d0d97e-ad36-4c36-b650-af026e1cd18a.png)
+![Youtubue](https://user-images.githubusercontent.com/23313008/164478531-17d0d97e-ad36-4c36-b650-af026e1cd18a.png)  
 실생활에서 쓰이는 인덱스의 예제를 가져와봤다.  
 만약 내가 트리를 공부하고싶은데 색인 페이지가 없다면 모든 페이지를 다 뒤져서 찾아야한다.  
 또한 내가 듣고싶은 노래가 있는데 색인 정보가 없다면 10초씩 넘기면서 내가 듣고싶은 노래가 나올때까지 찾아야한다.  
@@ -65,9 +65,25 @@ Index Range Scan을 통한 테이블 액세스는 랜덤 액세스와 Single Blo
 - 보통의 DBMS에서 인덱스는 b+tree 자료구조를 가지고있다 (Mysql InnoDB!)
 - Root, Branch, Leaf 노드가 있다.  
 - 루트와 브랜치블록에 있는 각 레코드는 하위 블록에 대한 주소값을 가지고 있다.
-![btree](https://user-images.githubusercontent.com/23313008/164485061-4d3f79ef-5ca6-4d4d-8ace-a4e414ce6b4e.png)
+![btree](https://user-images.githubusercontent.com/23313008/164485061-4d3f79ef-5ca6-4d4d-8ace-a4e414ce6b4e.png)  
+(출처) https://ssup2.github.io/theory_analysis/B_Tree_B+_Tree/  
+위 그림에서 트리 꼭대기에 있는 노드는 '루트'이고 루트 밑에 있는 노드들은 '브랜치'이며 브랜치 아래에 있는 노드들은 '리프'이다.  
+루트와 브랜치 블록에 있는 각 레코들은 하위 블록에 대한 주소값을 가지고 있다.  
+키값은 하위 블록에 저장된 키값의 범위를 나타낸다.  
+예를들어 루트 블록 30레코드가 가르키는 왼쪽 하위블록에는 30보다 작거나 같은 키값이 저장되어있다.  
+### Leaf
+- 리프 블록에 저장된 각 레코드는 키값 순으로 정렬이 되어있고 각 레코드마다 '테이블 레코드'를 가르키는 주소값(ROWID)를 가지고 있다.  
+- 만약 인덱스 키값이 같으면 ROWID순으로 정렬된다.  
+- 인덱스를 스캔하는 이유는 검색 조건을 만족하는 소량의 데이터를 빨리 찾고 거기서 ROWID를 얻기 위해서다  
+- ROWID는 아래와 같이 데이터 블록 주소(DBA, Data Block Address)와 로우 번호로 구성되므로 이 값을 알면 테이블 레코드를 찾아갈 수 있다.
 
-
-  
-
-
+-> ROWID = 데이터 블록 주소 + 로우 번호
+-> 데이터 블록 주소 = 데이터 파일 번호 + 블록 번호
+-> 블록 번호 = 데이터 파일 내에서 부여한 순번
+-> 로우 번호 = 블록 내 순번
+### LMC(Leftmost Child)
+루트와 브랜치노드에는 특별한 키값을 가지지 않는 엔트리가 하나 있다.  
+그 엔트리를 LMC라고 하며 노드의 첫번째 값으로 키값을 가진 첫번째 엔트리 보다 작은 값 이라는 의미를 가져  
+해당 노드의 자식 노드중 가장 왼쪽 끝에 위치한 블록을 가르킨다.  
+얘가 가지는 값은 첫번째 레코드보다 작거나 같은 레코드가 저장되어 있다. 
+->  크게 중요해보이는 내용은 아닌듯 하여 따로 뺐습니다.
