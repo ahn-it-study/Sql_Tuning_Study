@@ -101,8 +101,8 @@ Index Range Scan을 통한 테이블 액세스는 랜덤 액세스와 Single Blo
 - 책에서는 이정표로 비교했다.
 ## 수평적 탐색
 수직적 탐색을 통해 스캔 시작점을 찾았으면 찾고자 하는 데이터가 나타나지 않을떄까지 리프  블록을 수평적으로 스캔한다.  
-인덱스 탐색에서 본격적으로 데이터를 찾는 과정이다.  
-![Untitled Diagram](https://user-images.githubusercontent.com/2  3313008/164605585-c4d768be-ffea-48f7-9af8-be47a779b047.jpg)  
+인덱스 탐색에서 본격적으로 데이터를 찾는 과정이다.
+![Untitled Diagram](https://user-images.githubusercontent.com/23313008/164605585-c4d768be-ffea-48f7-9af8-be47a779b047.jpg)   
 - 리프 블록 끼리는 서로 앞 뒤 블록에 대한 주소값을 가지고 있음 (Double LinkedList)  
 ### 인덱스를 수평적으로 탐색하는 이유
  - 조건절을 만족하는 데이터를 모두 찾기 위해
@@ -117,4 +117,3 @@ Index Range Scan을 통한 테이블 액세스는 랜덤 액세스와 Single Blo
  책에 나와있는 그림은 좀 헷갈려서 인터넷에서 따로 퍼왔습니다.  
  결합 인덱스의 핵심은 A이면서 B인 레코드를 찾는것이다.  
  인덱스 선두 컬럼을 "="으로 검색할 땐 어느 컬럼을 인덱스 앞쪽에 두든 I/O갯수가 같으믈 ㅗ 성능도 똑같다.  
-  
