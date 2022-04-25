@@ -35,7 +35,7 @@
 
 ### 8. Index Skip Scan
 - 결국 수직적 탐색 logn + 수평적 탐색 n은 맞다.    
-  하지만 수평적 탐색을 할 때 해당 블록을 액세스 할지말지 결정한다는 장점이 있다.    
+  하지만 수평적 탐색을 할 때 해당 블록을 액세스 할지말지 결정한다는 것이 관건이다.    
   반드시는 아니지만 Index Full Scan > Index Skip Scan > Index Range Scan 단위로 액세스 범위가 줄어든다고 생각하면 좋다.
 
 ### 9. Index Fast Full Scan 
