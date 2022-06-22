@@ -267,3 +267,82 @@ SELECT * FROM SOURCE;
 Array Processing의 핵심은 다량의 로우를 한번에 삽입할 수 있게 도와주는 기능입니다.  
 예를들어 100만개의 데이터를 1만개씩 끊어서 100번만 삽입 합니다.  
 이 기능을 이용한다면 One SQL로 구현하지 않고도 Call 부하를 획기적으로 줄일 수 있습니다.  
+## 인덱스 및 제약 해제를 통한 대량 DML 튜닝
+앞서 설명했듯 인덱스와 무결성 제약 조건은 DML 성능에 큰 영향을 끼칩니다.  
+OLTP 환경에서는 이 기능을 해제할 순 없지만 배치 프로그램에서는 이 기능을 해제함으로써 큰 성능개선 효과를 얻을 수 있습니다.  
+이번 테스트에서는 이전 보다 더 많은 데이터인 1000만건을 입력했다고 가정합니다.  
+```sql
+create table source
+as
+select b.no a.*
+from (select * from emp where rownum <= 10) a
+    ,(select rownum as no from dual connect by level <= 1000000) b;
+
+create table target
+as
+select * from source where 1 = 2;
+
+alter table target add
+constraint target_pk primary key(no, empno);
+
+create index target target_x1 on target(ename);
+```
+PK 제약을 생성하면 Unique 인덱스가 자동으로 생성된다. 추가로 일반 인덱스를 하나 더 만들었으므로 인덱스는 총 두개입니다.  
+이 상태에서 1000만건을 입력한다면 PK 제약과 인덱스가 있는 상태에서 1분 19초가 걸렸다고 나와있습니다.  
+### PK 제약과 인덱스 해제 1 - PK 제약에 Unique 인덱스를 사용한 경우
+이번에는 PK 제약과 인덱스를 해제한 상태에서 입력해 보면  
+```sql
+truncate table target;
+alter table target modify constraint target_pk disable drop index;
+```
+PK 제약을 비활성화하면서 인덱스도 Drop 했습니다.  
+```sql
+alter index target_x1 unusable;
+```
+이 상태에서 1000만건의 데이터를 집어넣어보면 5.84초만에 수행했다고 나와있습니다.  
+임시로 PK 제약을 비활성화 한 뒤 데이터를 집어넣었잖아요?  
+이후에 다시 원래대로 활성화를 시켜주면 모든 작업이 끝납니다.  
+```sql
+alter table target modify constraint target_pk enable NOVALIDATE;
+```
+NOVALIDATE 옵션은 기입력된 데이터에 대한 무결성 체크를 생략하도록 하는 옵션입니다.  
+### skip_unusable_indexes
+인덱스가 Unusable 상태에서 데이터를 입력하려면 skip_unusable_indexes 파라미터를 true로 설정해야 합니다.  
+디폴트는 true 입니다.  
+```sql
+alter session set skip_unusable_indexes = true;
+```
+### PK 제약에 Non-Unique 인덱스를 사용한 경우
+조금 전 테스트에서 X1 인덱스는 Unusable 상태로 변경했지만, PK 인덱스는 제약을 비활성화 하면서 아예 Drop 해버렸습니다.(PK 제약을 비활성화 할 떄 사용한 drop index 옵션 참조)  
+PK 인덱스는 Unusable 상태에서 데이터를 입력할 수 없기 떄문입니다.  
+PK 인덱스를 Drop 하지 않고 Unusable 상태에서 데이터를 입력하고 싶다면 PK 제약에 Non-Unique 인덱스를 사용하면 됩니다.  
+```sql
+set timing off;
+truncate table target;
+alter table target drop primary key drop index;
+
+create index target_pk on target(no, empno); -- Non-Unique 인덱스 생성
+
+alter table target add
+constraint target_pk primary key(no, empno)
+using index target_pk; --  PK 제약에 Non-Unique 인덱스를 사용하도록 지정
+```
+그리고 PK 제약을 비활성화하고, 인덱스를 Unusable 상태로 변경합니다.  
+PK 제약을 비활성화했지만 인덱스는 Drop 하지 않고 남겨놨습니다.  
+```sql
+alter table target modify constraint target_pk disable keep index;
+
+alter index target_pk unusable;
+
+alter index target_x1 unusable;
+```
+그리고 똑같이 데이터를 insert 합니다.  
+작업을 마친 이후 인덱스를 재생성하고 PK 제약을 다시 활성화 합니다.  
+```sql
+alter index target_x1 rebuild;
+
+alter index target_pk rebuild;
+
+alter table target modify constraint target_pk enable novalidate;
+```
+이렇게 하여도 기존 (1분 19초)보다 훨씬 더빨리 작업을 마칩니다.(책에서는 18초가 걸렸다고 나옵니다.)  
