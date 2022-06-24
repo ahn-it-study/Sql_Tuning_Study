@@ -346,3 +346,234 @@ alter index target_pk rebuild;
 alter table target modify constraint target_pk enable novalidate;
 ```
 이렇게 하여도 기존 (1분 19초)보다 훨씬 더빨리 작업을 마칩니다.(책에서는 18초가 걸렸다고 나옵니다.)  
+## 수정가능 조인 뷰
+### 전통 적인 방식의 UPDATE
+```sql
+update 고객 c
+set 최종거래일시 = (select max(거래일시) from 거래
+                 where 고객번호 = c.고객번호
+                 and 거래일시 >= trunc(add_months(sysdate, - 1)))
+   ,최근거래횟수 = (select count(*) from 거래
+                where 고객번호 = c.고객번호 and 거래일시 >= trunc(add_months(sysdate, -1)))
+   ,최근거래금액 = (select sum(거래금액) from 거래
+                 where 고객번호 = c.고객번호 and 거래일시 >= trunc(add_months(sysdate, -1)))
+where exists (select 'x' from 거래
+             where 고객번호 = c.고객번호
+             and 거래일시 >= trunc(add_months(sysdate, -1)));
+```
+위 UPDATE문은 아래와 같이 바꿀 수 있습니다.  
+```sql
+update 고객 c
+set (최종거래일시, 최근거래횟수, 최근거래금액) =
+    (select max(거래일시), count(*), sum(거래금액)
+    from 거래
+    where 고객번호 = c.고객번호
+    and rㅓ래일시 >= trunc(add_months(sysdate, -1)))
+where exists (select 'x' from 거래
+              where 고객번호 = c.고객번호
+              and 거래일시 >= trunc(add_months(sysdate, -1)));
+```
+바뀐 쿼리에도 비효율이 없는것은 아닙니다. 한달 이내 고객별 거래 데이터를 두 번 조회하기 때문입니다.  
+이는 총 고객수와 한 달 이내 거래 고객 수에 따라 성능이 좌우됩니다.  
+총 고객수가 아주 많다면 Exists 서브쿼리를 아래와 같이 해시 세미 조인으로 유도하는 것을 고려할 수 있습니다.  
+```sql
+update 고객 c
+set (최종거래일시, 최근거래횟수, 최근거래금액) =
+    (select max(거래일시), count(*), sum(거래금액)
+    from 거래
+    where 고객번호 = c.고객번호
+    and rㅓ래일시 >= trunc(add_months(sysdate, -1)))
+where exists (select /*+ unnest hash_sj */ 'x' from 거래
+              where 고객번호 = c.고객번호
+              and 거래일시 >= trunc(add_months(sysdate, -1)));
+```
+만약 한 달 이내 거래를 발생시킨 고객이 많아 UPDATE 발생량이 많다면, 아래와 같이 변경하는 것을 고려 할 수 있지만  
+모든 고객 레코드에 LOCK이 걸리는 것은 물론 이전과 같은 값으로 갱신되는 비중이 높을수록 Redo 로그 발생량이 증가해 오히려 비효율적일 수 있습니다.  
+```sql
+update 고객 c
+set (최종거래일시, 최근거래횟수, 최근거래금액) = 
+    (select nvl(max(거래일시), c.최종거래일시), decode(count(*), 0, c.최근거래횟수, count(*)),
+                nvl(sum(거래금액), c.최근거래금액)
+    from 거래
+    where 고객번호 = c.고객번호
+    and 거래일시 >= trunc(add_months(sysdate, -1)))
+```
+이처럼 다른 테이블과 조인이 필요할 때 전통적인 UPDATE문을 사용하면 비효율을 완전히 해소할 수 없습니다.  
+## 수정가능 조인 뷰
+### 조인 뷰
+from 절에 2개 이상의 테이블을 가진 뷰를 말합니다.  
+  
+처리 범위가 넓은(조인 테이블이 많은 경우?) UPDATE 문의 경우 WHERE 절이나 SET 절에서 테이블에 반복적으로 Random Access 해야하므로 수정가능 조인 뷰를 활용합니다.  
+전통적인 UPDATE문은 여러번 조인을 해야 하는 비효율이 발생하지만(SET, WHERE 할 떄 Random Access 발생), 수정가능 조인뷰는 업데이트할 테이블을 넣는 대신에 바꿔야할 데이터만 들고와서 수정하는 쿼리 입니다.  
+수정가능 조인 뷰는 1:M 관계에서 M 쪽 집합에만 수정이 가능하다는 특징이 있습니다.  
+```sql
+UPDATE(
+    SELECT t1.r a, t2.c b
+    FROM atable t1, btable t2
+    WHERE t1.id = t2.id
+) t
+SET 
+    t.a = 'aa',
+    t.b = 'bb;
+```
+1쪽 집합과 조인되는 M쪽 집합(키 보존 테이블)에만 입력, 수정, 삭제가 가능한데, 키 보존 테이블에만 변경이 가능하다는 것입니다.  
+하지만 쿼리가 실행되면서 어느쪽이 키 보존 테이블인지 알 수 없는 경우 (둘다 키 보존테이블이 아닌경우에)에 오류가(ORA-01779) 발생합니다.  
+이 경우 한쪽 집합에 PK 제약을 설정하거나 unique 인덱스를 생성하야 수정가능 조인 뷰를 통한 DML 이 가능합니다.  
+## 키 보존 테이블이란?
+키 보존 테이블이란 조인된 결과집합을 통해서도 중복 값 없이 Unique하게 식별이 가능한 테이블을 말합니다.  
+(뷰에 ROWID를 제공하는 테이블)  
+조인되는 두 테이블중 1쪽 테이블에 유니크 인덱스를 제거하게 되면 키 보존 테이블이 없기떄문에 뷰에서 rowid 를 출력할 수 없게 됩니다.  
+### ORA-01799 오류 회피
+아래와 같이 dept 테이블에 AVG_SAL 컬럼을 추가해보겠습니다.  
+```sql
+alter table dept add avg_sal number(7, 2);
+```
+아래는 EMP로부터 부서별 평균 급여를 계산해서 방금 추가한 컬럼에 반영하는 UPDATE 문입니다.  
+```sql
+update
+(select d.deptno, d.avg_sal as d_avg_sal, e.avg_sal as e_avg_sal
+from (select deptno, round(avg(sal), 2) avg_sal from emp group by deptno) e, dept d
+where d.deptno = e.deptno)
+set d_avg_sal = e_avg_sal;
+```
+11g 이하 버전에서 위 UPDATE문을 실행하면 ORA-01779 에러가 발생합니다.  
+EMP 테이블을 deptno로 group by 했으므로 DEPTNO 컬럼으로 조인한 DEPT 테이블은 키가 보존되는데도 옵티마이저가 불필요한 제약을 가한것입니다.  
+이럴 때 10g에선 bypass_ujvc 힌트를 이용해 제약을 회피할 수 있었습니다.(11g부턴 사용할 수 없습니다.)  
+수정가능 조인 뷰 검사를 생략하라고 옵티마이저에게 지시하는 힌트입니다.  
+```sql
+update /*+ bypass_ujvc */
+(select d.deptno, d.avg_sal as d_avg_sal, e.avg_sal as e_avg_sal
+from (select deptno, round(avg(sal), 2) avg_sal from emp group by deptno) e, dept d
+where d.deptno = e.deptno)
+set d_avg_sal = e_avg_sal;
+```
+11g부터는 위 힌트를 사용할 순 없고 MERGE 문으로 바꿔줘야합니다.  
+수정가능 조인 뷰는 12c버전에서 오히려 기능이 개선됐습니다.  
+즉, 12c부터는 힌트를 사용하지 않아도 위 UPDATE 문이 잘 실행됩니다.  
+GROUP BY 한 집합과 조인한 테이블은 키가 보존된다는 사실을 오라클이 인정하기 시작한것입니다.  
+이러한 기능 개선은 수정가능 조인 뷰의 활용성을 높여줍니다.  
+예를들어 고객 t 테이블 고객번호에 유니크 인덱스가 없으면 아래 쿼리는 어떠한 버전에서도 실행할 수 없습니다.  
+```sql
+update (
+    select o.주문금액, o.할인금액, c.고객등급
+    from 주문_t o, 고객_t c
+    where o.고객번호 = c.고객번호
+    and o.주문금액 >= 100000
+    and c.고객등급 = 'A'
+)
+SET 할인금액 = 주문금액 * 0.2, 주문금액 = 주문금액 * 0.8;
+```
+12c에서는 아래와 같이 고객_t 테이블을 Group By 처리함으로써 ORA-01779 에러를 회피할 수 있습니다.  
+```sql
+update (
+    select o.주문금액, o.할인금액
+    from 주문_t o
+    , (select 고객번호 from 고객_t where 고객등급 = 'A' group by 고객번호) c
+    where o.고객번호 = c.고객번호
+    and o.주문금액 >= 1000000
+)
+set 할인금액 = 주문금액 * 0.2, 주문금액 = 주문금액 * 0.8;
+```
+배치 프로그램이나 데이터 이행 프로그램에서 사용하는 중간 임시 테이블에는 일일이 PK 제약이나 인덱스를 생성하지 않으므로  
+이 패턴이 유용할 수 있습니다.  
+
+결론적으로 뷰는 from 절에 여러개의 테이블이 있는 것이고 두 테이블을 조인하여 업데이트 할 때는 1쪽 테이블에 유니크 인덱스가 있어야 한다는 것입니다.  
+## MERGE문 활용
+MERGE 문은 UPSERT(UPDATE + INSERT)라고도 불리웁니다.  
+이유는 Source 테이블 기준으로 Target 테이블과 Left Outer 방식으로 조인해서 조인에 성공하면 UPDATE 실패하면 INSERT 하기 때문입니다.  
+![무제](https://user-images.githubusercontent.com/23313008/175480635-83653b8f-8372-44fd-909c-d9288676a87b.png)
+busercontent.com/23313008/174943893-5419bfd9-786f-4e0e-8a5f-fff2e38d7ef3.png)  
+### 예제
+#### 1. 전일 발생한 변경 데이터를 기간계 시스템으로부터 추출
+```sql
+create table customer_delta
+as
+select * from customer
+where mod_dt >= trunc(sysdate)-1
+and mod_dt < trunc(sysdate);
+```
+#### 2. CUSTOMER_DELTA 테이블을 DW(데이터 웨어하우스) 시스템으로 전송
+#### 3. DW 시스템으로 적재
+```sql
+merge into customer t using customer_delta s on (t.cust_id=s.cust_id)
+when matched then update
+    set t.cust_nm = s.cust_nm, t.email = s.email
+when not matched then insert
+    (cust_id, cust_nm, email, tel_no, region, addr, reg_dt) values
+    (s.cust_idm s.cust_nm, s.email, s.tel_no, s.region, s.addr, s.reg_dt);
+```
+### Optional Calueses
+update와 insert를 선택적으로 처리할 수 있습니다.
+```sql 
+when matched then update
+    set t.cust_nm = s.cust_nm, t.email = s.email
+when not matched then insert
+    (cust_id, cust_nm, email, tel_no, region, addr, reg_dt) values
+    (s.cust_idm s.cust_nm, s.email, s.tel_no, s.region, s.addr, s.reg_dt);
+```
+이 기능을 통해 아래와 같이 수정가능 조인 뷰 기능을 대체할 수 있게 되었습니다.
+```sql
+<수정가능 조인 뷰>
+update
+    (select d.deptno, d.avg_sal as d_avg_sal, e.avg_sal as e_avg_sal
+    from (select deptno, round(avg(sal, 2)) avg_sal from emp group by dept no) e, dept d
+    where d.deptno = e.deptno)
+set d_avg_sal = e_avg_sal;
+
+<Merge 문>
+merge into dept d
+using (select deptni, round(avg(sal), 2) avg_sal from emp group by deptno) e
+on (d.deptno = e.deptno)
+when matched then update set d.avg_sal = e.avg_sal;
+```
+### Conditional Operations
+ON 절에 기술한 조인문 외에 추가로 조건절을 기술할 수도 있습니다.  
+```sql
+merge into dept d
+using (select deptni, round(avg(sal), 2) avg_sal from emp group by deptno) e
+on (d.deptno = e.deptno)
+when matched then 
+    update set d.avg_sal = e.avg_sal
+    where d.avg_sag > 1000; <- 이부분
+```
+### DELETE Clause
+이미 저장된 데이터를 조건에 따라 지우는 기능도 제공합니다.  
+```sql
+merge into customer t using customer_delta s on (t.cust_id = s.cust_id)
+when matched then
+    update set t.cust_nm = s.cust_nm, t.email = s.email ...
+    delete where t.withdraw_dt is not null -- 탈퇴일시가 null이 아닌 레코드 삭제
+```
+- 위 예시에서 UPDATE가 이루어진 결과로서 탈퇴일시가 Null이 아닌 레코드만 삭제합니다.(탈퇴일시가 Null이 아니었어도 MERGE문을 수행한 결과가 null이면 삭제하지 않습니다.)  
+- 조인에 성공한 데이터만 삭제합니다.  
+- 즉, Source 테이블에서 삭제된 데이터가 있어도 조인되지 못하면 Target 테이블에도 지우고 싶을텐데 그 역할까지는 못한다는 것입니다.  
+### Merge Into 활용 예
+저장하려는 레코드가 기존에 있던 것이면 UPDATE를 수행하고, 그렇지 않으면 INSERT 하랴고 합니다.  
+그럴 때 아래와 같이 처리하면 SQL을 항상 두 번씩 (SELECT 한번, INSERT 또는 UPDATE 한번) 수행합니다.  
+```sql
+select count(*) into :cnt from dept where deptno = :val1;
+
+if :cnt = 0 then
+    insert into dept(deptno, dname, loc) values (:val1, :val2, :val3);
+else
+    update dept set dname = :val2, loc = :val3 where deptno = :val1;
+end if;
+```
+아래와 같이 하면 SQL을 최대 두 번 수행합니다.  
+```sql
+update dept set dname = :val2, loc = :val3 where deptno = :val1;
+
+if sql%rowcount = 0 then
+    insert into dept(deptni, dname, loc) values(:val1, :val2, :val3);
+end if;
+```
+하지만 아래와 같이 Merge 문을 사용하면 SQL을 한 번만 수행합니다.  
+```sql
+merge into dept a
+using (select :val1 deptno, :val2 dname, :val3 loc from dual) b
+on (b.deptno = a.deptno)
+when matched then
+    update set dname = b.dname, loc = b.loc
+when not matched then
+    insert (a.deptno, a.dname, a.loc) values (b.deptno, b.dname, b.loc).
+```
